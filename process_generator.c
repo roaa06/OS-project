@@ -166,6 +166,10 @@ int main(int argc, char * argv[])
     if (existing_qid != -1)
         msgctl(existing_qid, IPC_RMID, NULL);
 
+    int existing_shmid = shmget(SHKEY, 4, 0666);
+    if (existing_shmid != -1)
+        shmctl(existing_shmid, IPC_RMID, NULL);
+
     msg_queue_id = msgget(PROCESS_MSG_KEY, IPC_CREAT | 0666);
     if (msg_queue_id == -1)
     {
