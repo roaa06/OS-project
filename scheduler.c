@@ -1,8 +1,8 @@
 #include "headers.h"
 
-// ========================================================
-// Global State & Simulation Variables
-// ========================================================
+
+
+
 int chosen_algo = 1;
 int total_processes = 0;
 int completed_processes = 0;
@@ -12,38 +12,38 @@ int msg_queue_id = -1;
 
 FILE *log_file = NULL;
 
-// Process Storage
+
 PCB all_pcbs[MAX_PROCESSES];
 int all_pcb_count = 0;
 
-// Ready Queue
+
 PCB *ready_queue[MAX_PROCESSES];
 int ready_count = 0;
 
-// Blocked Queue (for HPF resource waiting)
+
 PCB *blocked_queue[MAX_PROCESSES];
 int blocked_count = 0;
 
-// CPU & Context Switch State
+
 PCB *running_pcb = NULL;
 PCB *switching_to_pcb = NULL;
 int cs_remaining = 0;
 int quantum_remaining = 0;
 bool cpu_was_idle = true;
 
-// System Resources
+
 typedef struct {
     char id[MAX_RESOURCE_NAME_LEN];
     bool is_held;
-    int holder_id; // Process ID of holder, -1 if free
+    int holder_id; 
 } SysResource;
 
 SysResource system_resources[MAX_PROCESSES * MAX_RESOURCES_PER_PROCESS];
 int system_resource_count = 0;
 
-// ========================================================
-// Helper Functions: Resources
-// ========================================================
+
+
+
 SysResource *getOrCreateResource(const char *res_id)
 {
     for (int i = 0; i < system_resource_count; i++)
@@ -59,9 +59,9 @@ SysResource *getOrCreateResource(const char *res_id)
     return r;
 }
 
-// ========================================================
-// Helper Functions: Priority & Aging
-// ========================================================
+
+
+
 int getEffectivePriority(PCB *p)
 {
     if (chosen_algo == ALGO_HPF_DEMOTION)
@@ -75,12 +75,12 @@ int getEffectivePriority(PCB *p)
     return p->original_priority;
 }
 
-// For comparison: returns the active priority of a process
+
 int getActivePriority(PCB *p)
 {
     int base_prio = (chosen_algo == ALGO_HPF_DEMOTION) ? getEffectivePriority(p) : p->original_priority;
 
-    // If holding a resource with priority inheritance active, use the better (smaller)
+    
     if (p->holds_resource && p->inherited_priority != -1)
     {
         if (p->inherited_priority < base_prio)
@@ -89,7 +89,7 @@ int getActivePriority(PCB *p)
     return base_prio;
 }
 
-// Recalculate inherited priority for a resource holder based on waiting blocked processes
+
 void updateInheritedPriority(PCB *holder)
 {
     if (!holder || !holder->holds_resource)
@@ -113,9 +113,9 @@ void updateInheritedPriority(PCB *holder)
     holder->inherited_priority = best_inherited;
 }
 
-// ========================================================
-// Helper Functions: Ready Queue Management
-// ========================================================
+
+
+
 void readyQueuePush(PCB *p)
 {
     p->state = STATE_READY;
@@ -135,7 +135,7 @@ PCB *readyQueuePopAt(int index)
     return p;
 }
 
-// Select next process based on the scheduling algorithm
+
 int selectNextProcessIndex()
 {
     if (ready_count == 0)
@@ -143,7 +143,7 @@ int selectNextProcessIndex()
 
     if (chosen_algo == ALGO_SJF)
     {
-        // Smallest runtime. Ties: earlier arrival, then smaller ID
+        
         int best_idx = 0;
         for (int i = 1; i < ready_count; i++)
         {
@@ -164,12 +164,12 @@ int selectNextProcessIndex()
     }
     else if (chosen_algo == ALGO_RR)
     {
-        // First In First Out
+        
         return 0;
     }
-    else // ALGO_HPF or ALGO_HPF_DEMOTION
+    else 
     {
-        // Highest priority (smallest number). Ties: smaller ID
+        
         int best_idx = 0;
         for (int i = 1; i < ready_count; i++)
         {
@@ -191,9 +191,9 @@ int selectNextProcessIndex()
     }
 }
 
-// ========================================================
-// Helper Functions: Logging
-// ========================================================
+
+
+
 void logProcessEvent(int current_time, PCB *p, const char *event_type)
 {
     int wait = current_time - p->data.arrival_time - p->execution_time;
@@ -216,12 +216,12 @@ void logProcessEvent(int current_time, PCB *p, const char *event_type)
     fflush(log_file);
 }
 
-// ========================================================
-// Dispatching & Process Control
-// ========================================================
+
+
+
 void dispatchProcess(PCB *p, int current_time)
 {
-    p->consecutive_ready_time = 0; // Reset aging counter 'w' upon dispatch
+    p->consecutive_ready_time = 0; 
     p->state = STATE_RUNNING;
     running_pcb = p;
 
@@ -230,7 +230,7 @@ void dispatchProcess(PCB *p, int current_time)
 
     if (p->pid == -1)
     {
-        // First time starting process
+        
         p->start_time = current_time;
         logProcessEvent(current_time, p, "started");
 
@@ -247,7 +247,7 @@ void dispatchProcess(PCB *p, int current_time)
     }
     else
     {
-        // Resuming previously stopped process
+        
         logProcessEvent(current_time, p, "resumed");
         kill(p->pid, SIGCONT);
     }
@@ -263,9 +263,9 @@ void stopProcess(PCB *p, int current_time)
     }
 }
 
-// ========================================================
-// Performance Statistics Generation
-// ========================================================
+
+
+
 void generatePerfReport(int finish_time)
 {
     FILE *perf_file = fopen("scheduler.perf", "w");
@@ -296,7 +296,7 @@ void generatePerfReport(int finish_time)
     double avg_wta = sum_wta / all_pcb_count;
     double avg_wait = (double)sum_wait / all_pcb_count;
 
-    // Population standard deviation: divide by N, not N - 1
+    
     double variance = 0.0;
     for (int i = 0; i < all_pcb_count; i++)
     {
@@ -316,9 +316,9 @@ void generatePerfReport(int finish_time)
     fclose(perf_file);
 }
 
-// ========================================================
-// Main Scheduler Loop
-// ========================================================
+
+
+
 int main(int argc, char *argv[])
 {
     if (argc >= 5)
@@ -348,35 +348,35 @@ int main(int argc, char *argv[])
     int sim_time = 0;
     int last_finish_time = 0;
 
-    // Simulation runs until all processes have finished
+    
     while (completed_processes < total_processes)
     {
         int current_time = getClk();
         if (current_time <= sim_time)
         {
-            usleep(20000); // 20ms pause
+            usleep(20000); 
             continue;
         }
 
-        // Advance simulation second-by-second
+        
         while (sim_time < current_time && completed_processes < total_processes)
         {
             sim_time++;
-            usleep(30000); // 30ms delay to guarantee generator has sent all arrivals for sim_time
+            usleep(30000); 
 
-            // ----------------------------------------------------
-            // If currently in a context switch:
-            // ----------------------------------------------------
+            
+            
+            
             if (cs_remaining > 0)
             {
-                // Age ready processes during context switch
+                
                 for (int i = 0; i < ready_count; i++)
                     ready_queue[i]->consecutive_ready_time++;
 
                 cs_remaining--;
                 if (cs_remaining == 0 && switching_to_pcb != NULL)
                 {
-                    // Context switch has completed: dispatch target process
+                    
                     PCB *next = switching_to_pcb;
                     switching_to_pcb = NULL;
                     dispatchProcess(next, sim_time);
@@ -385,39 +385,39 @@ int main(int argc, char *argv[])
             }
             else if (running_pcb != NULL)
             {
-                // Process executed for 1 second of CPU time
+                
                 running_pcb->execution_time++;
                 running_pcb->remaining_time--;
                 if (chosen_algo == ALGO_RR)
                     quantum_remaining--;
 
-                // Age ready processes while CPU is busy
+                
                 for (int i = 0; i < ready_count; i++)
                     ready_queue[i]->consecutive_ready_time++;
             }
             else
             {
-                // CPU is idle: age ready processes if any
+                
                 for (int i = 0; i < ready_count; i++)
                     ready_queue[i]->consecutive_ready_time++;
             }
 
-            // ====================================================
-            // Phase 1: Running Process's Own Events
-            // Order: Release resource -> Capture resource -> Finish
-            // ====================================================
+            
+            
+            
+            
             if (running_pcb != NULL && cs_remaining == 0)
             {
                 PCB *curr = running_pcb;
 
-                // 1. Check Resource Release
+                
                 if (curr->holds_resource)
                 {
                     int r_idx = curr->current_resource_idx;
                     if (r_idx < curr->data.resource_count &&
                         curr->execution_time == curr->data.resources[r_idx].release_time)
                     {
-                        // Release resource
+                        
                         SysResource *res = getOrCreateResource(curr->held_resource_id);
                         res->is_held = false;
                         res->holder_id = -1;
@@ -427,7 +427,7 @@ int main(int argc, char *argv[])
                         curr->inherited_priority = -1;
                         curr->current_resource_idx++;
 
-                        // Direct transfer to highest-priority waiting blocked process
+                        
                         int best_blocked_idx = -1;
                         for (int i = 0; i < blocked_count; i++)
                         {
@@ -451,25 +451,25 @@ int main(int argc, char *argv[])
                         if (best_blocked_idx != -1)
                         {
                             PCB *unblocked = blocked_queue[best_blocked_idx];
-                            // Remove from blocked
+                            
                             for (int i = best_blocked_idx; i < blocked_count - 1; i++)
                                 blocked_queue[i] = blocked_queue[i + 1];
                             blocked_count--;
 
-                            // Transfer resource
+                            
                             res->is_held = true;
                             res->holder_id = unblocked->data.id;
                             unblocked->holds_resource = true;
                             strncpy(unblocked->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
                             updateInheritedPriority(unblocked);
 
-                            // Unblocked process becomes Ready
+                            
                             readyQueuePush(unblocked);
                         }
                     }
                 }
 
-                // 2. Check Resource Capture
+                
                 if (!curr->holds_resource && curr->current_resource_idx < curr->data.resource_count)
                 {
                     int r_idx = curr->current_resource_idx;
@@ -478,7 +478,7 @@ int main(int argc, char *argv[])
                         SysResource *res = getOrCreateResource(curr->data.resources[r_idx].resource_id);
                         if (!res->is_held)
                         {
-                            // Capture immediately
+                            
                             res->is_held = true;
                             res->holder_id = curr->data.id;
                             curr->holds_resource = true;
@@ -487,13 +487,13 @@ int main(int argc, char *argv[])
                         }
                         else
                         {
-                            // Resource busy: process blocks
+                            
                             stopProcess(curr, sim_time);
                             curr->state = STATE_BLOCKED;
                             blocked_queue[blocked_count++] = curr;
                             running_pcb = NULL;
 
-                            // Update priority inheritance of the resource holder
+                            
                             for (int i = 0; i < all_pcb_count; i++)
                             {
                                 if (all_pcbs[i].data.id == res->holder_id)
@@ -506,7 +506,7 @@ int main(int argc, char *argv[])
                     }
                 }
 
-                // 3. Check Finish
+                
                 if (curr->remaining_time == 0)
                 {
                     int status;
@@ -530,9 +530,9 @@ int main(int argc, char *argv[])
                 }
             }
 
-            // ====================================================
-            // Phase 2: Arrivals from Process Generator (in ID order)
-            // ====================================================
+            
+            
+            
             ProcessMessage msg;
             while (msgrcv(msg_queue_id, &msg, sizeof(ProcessData), 1, IPC_NOWAIT) != -1)
             {
@@ -556,18 +556,18 @@ int main(int argc, char *argv[])
                 readyQueuePush(p);
             }
 
-            // ====================================================
-            // Phase 3: Preemption Checks, Quantum Expiry & Next Process
-            // ====================================================
+            
+            
+            
             if (cs_remaining > 0)
             {
-                // Still switching, do not schedule
+                
                 continue;
             }
 
             if (chosen_algo == ALGO_SJF)
             {
-                // Non-preemptive: if a process is already running, let it continue
+                
                 if (running_pcb == NULL && ready_count > 0)
                 {
                     int next_idx = selectNextProcessIndex();
@@ -575,13 +575,13 @@ int main(int argc, char *argv[])
 
                     if (cpu_was_idle)
                     {
-                        // 0 overhead on idle CPU
+                        
                         dispatchProcess(next, sim_time);
                         cpu_was_idle = false;
                     }
                     else
                     {
-                        // 1 sec context switch overhead
+                        
                         switching_to_pcb = next;
                         cs_remaining = context_switch_time;
                     }
@@ -597,12 +597,12 @@ int main(int argc, char *argv[])
                 {
                     if (quantum_remaining <= 0)
                     {
-                        // Quantum expired
+                        
                         if (ready_count > 0)
                         {
                             PCB *preempted = running_pcb;
                             stopProcess(preempted, sim_time);
-                            readyQueuePush(preempted); // placed at end of queue
+                            readyQueuePush(preempted); 
                             running_pcb = NULL;
 
                             PCB *next = readyQueuePopAt(selectNextProcessIndex());
@@ -611,7 +611,7 @@ int main(int argc, char *argv[])
                         }
                         else
                         {
-                            // Ready queue empty: continue for another quantum with no stop/switch/log
+                            
                             quantum_remaining = quantum;
                         }
                     }
@@ -635,11 +635,11 @@ int main(int argc, char *argv[])
                     cpu_was_idle = true;
                 }
             }
-            else // ALGO_HPF or ALGO_HPF_DEMOTION
+            else 
             {
                 if (running_pcb != NULL)
                 {
-                    // Check strictly higher priority preemption
+                    
                     if (ready_count > 0)
                     {
                         int next_idx = selectNextProcessIndex();
@@ -650,7 +650,7 @@ int main(int argc, char *argv[])
 
                         if (ready_prio < running_prio)
                         {
-                            // Strictly higher priority preempts running process
+                            
                             PCB *preempted = running_pcb;
                             stopProcess(preempted, sim_time);
                             readyQueuePush(preempted);
