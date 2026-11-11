@@ -1,6 +1,6 @@
 *.out
 *.o
-scheduler.log
-scheduler.perf
-processes.txt
-resources.txt
+/scheduler.log
+/scheduler.perf
+/processes.txt
+/resources.txt
