@@ -29,6 +29,12 @@ run_single_test() {
     echo -e "${BLUE}Running Test:${NC} ${TEST_NAME}"
     echo -e "${YELLOW}------------------------------------------------${NC}"
 
+    # Clean up any leftover processes or IPC from aborted previous runs
+    killall -9 clk.out scheduler.out process.out process_generator.out 2>/dev/null
+    ipcrm -M 300 2>/dev/null
+    ipcrm -Q 400 2>/dev/null
+    sleep 0.2
+
     # Setup input files
     cp "${TEST_DIR}/processes.txt" ./processes.txt
     if [ -f "${TEST_DIR}/resources.txt" ]; then
