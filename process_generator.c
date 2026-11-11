@@ -15,7 +15,7 @@ void clearResources(int signum)
     exit(0);
 }
 
-// Comparator to ensure processes are sorted by arrival time, tie-breaking by ID
+
 int compareProcesses(const void *a, const void *b)
 {
     ProcessData *p1 = (ProcessData *)a;
@@ -25,7 +25,7 @@ int compareProcesses(const void *a, const void *b)
     return p1->id - p2->id;
 }
 
-// Read processes.txt
+
 int readProcesses(const char *filename, ProcessData processes[])
 {
     FILE *file = fopen(filename, "r");
@@ -40,7 +40,7 @@ int readProcesses(const char *filename, ProcessData processes[])
 
     while (fgets(line, sizeof(line), file))
     {
-        // Skip comment lines and empty lines
+        
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
             continue;
 
@@ -58,17 +58,17 @@ int readProcesses(const char *filename, ProcessData processes[])
 
     fclose(file);
 
-    // Sort by arrival time, then by ID
+    
     qsort(processes, count, sizeof(ProcessData), compareProcesses);
     return count;
 }
 
-// Read resources.txt (used primarily by HPF)
+
 void readResources(const char *filename, ProcessData processes[], int count)
 {
     FILE *file = fopen(filename, "r");
     if (!file)
-        return; // Optional file if no resources used
+        return; 
 
     char line[256];
     while (fgets(line, sizeof(line), file))
@@ -107,7 +107,7 @@ int main(int argc, char * argv[])
 {
     signal(SIGINT, clearResources);
 
-    // 1. Read the input files
+    
     ProcessData processes[MAX_PROCESSES];
     int total_processes = readProcesses("processes.txt", processes);
     if (total_processes <= 0)
@@ -119,7 +119,7 @@ int main(int argc, char * argv[])
     readResources("resources.txt", processes, total_processes);
     printf("Successfully loaded %d processes.\n", total_processes);
 
-    // 2. Ask the user for the chosen scheduling algorithm and its parameters
+    
     int chosen_algo = 1;
     int quantum = 3;
     int context_switch_time = 1;
@@ -156,12 +156,12 @@ int main(int argc, char * argv[])
     }
     else
     {
-        // For SJF and HPF, context-switch time is fixed at 1 sec
+        
         context_switch_time = 1;
     }
 
-    // Initialize IPC Message Queue
-    // Clear any previous leftover message queue with the same key
+    
+    
     int existing_qid = msgget(PROCESS_MSG_KEY, 0666);
     if (existing_qid != -1)
         msgctl(existing_qid, IPC_RMID, NULL);
@@ -173,7 +173,7 @@ int main(int argc, char * argv[])
         exit(-1);
     }
 
-    // 3. Initiate and create the clock and scheduler processes
+    
     clk_pid = fork();
     if (clk_pid == 0)
     {
@@ -182,7 +182,7 @@ int main(int argc, char * argv[])
         exit(-1);
     }
 
-    // Initialize communication with clock
+    
     initClk();
 
     scheduler_pid = fork();
@@ -199,7 +199,7 @@ int main(int argc, char * argv[])
         exit(-1);
     }
 
-    // 4. Send process information to the scheduler at the appropriate arrival time
+    
     int sent_count = 0;
     while (sent_count < total_processes)
     {
@@ -218,14 +218,14 @@ int main(int argc, char * argv[])
             sent_count++;
         }
 
-        usleep(2000); // 2ms check to send arrivals immediately on clock tick
+        usleep(2000); 
     }
 
-    // 5. Wait for the scheduler to complete all processes
+    
     int status;
     waitpid(scheduler_pid, &status, 0);
 
-    // 6. Cleanup IPC and exit
+    
     clearResources(0);
     return 0;
 }
