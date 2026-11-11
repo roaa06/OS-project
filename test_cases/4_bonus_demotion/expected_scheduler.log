@@ -1,0 +1,10 @@
+At time 1 process 1 started arr 1 total 30 remain 30 wait 0
+At time 22 process 1 stopped arr 1 total 30 remain 9 wait 0
+At time 23 process 2 started arr 2 total 6 remain 6 wait 21
+At time 25 process 2 stopped arr 2 total 6 remain 4 wait 21
+At time 26 process 3 started arr 25 total 3 remain 3 wait 1
+At time 29 process 3 finished arr 25 total 3 remain 0 wait 1 TA 4 WTA 1.33
+At time 30 process 1 resumed arr 1 total 30 remain 9 wait 8
+At time 39 process 1 finished arr 1 total 30 remain 0 wait 8 TA 38 WTA 1.27
+At time 40 process 2 resumed arr 2 total 6 remain 4 wait 36
+At time 44 process 2 finished arr 2 total 6 remain 0 wait 36 TA 42 WTA 7.00

@@ -1,20 +1,39 @@
 #include "headers.h"
 
-/* Modify this file as needed*/
 int remainingtime;
+volatile sig_atomic_t last_clk;
 
-int main(int agrc, char * argv[])
+void handle_cont(int sig)
 {
+    // When resumed after SIGSTOP, update baseline clock so paused time isn't counted
+    last_clk = getClk();
+}
+
+int main(int argc, char * argv[])
+{
+    if (argc < 2)
+    {
+        printf("Usage: %s <runtime>\n", argv[0]);
+        exit(-1);
+    }
+
+    remainingtime = atoi(argv[1]);
+    signal(SIGCONT, handle_cont);
+
     initClk();
-    
-    //TODO it needs to get the remaining time from somewhere
-    //remainingtime = ??;
+    last_clk = getClk();
+
     while (remainingtime > 0)
     {
-        // remainingtime = ??;
+        int current_clk = getClk();
+        if (current_clk > last_clk)
+        {
+            remainingtime -= (current_clk - last_clk);
+            last_clk = current_clk;
+        }
+        usleep(50000); // 50ms pause to yield CPU while running
     }
-    
+
     destroyClk(false);
-    
     return 0;
 }
