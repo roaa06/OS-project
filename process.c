@@ -5,11 +5,11 @@ volatile sig_atomic_t last_clk;
 
 void handle_cont(int sig)
 {
-    // When resumed after SIGSTOP, update baseline clock so paused time isn't counted
+    (void)sig;
     last_clk = getClk();
 }
 
-int main(int argc, char * argv[])
+int main(int argc, char *argv[])
 {
     if (argc < 2)
     {
@@ -31,7 +31,7 @@ int main(int argc, char * argv[])
             remainingtime -= (current_clk - last_clk);
             last_clk = current_clk;
         }
-        usleep(50000); // 50ms pause to yield CPU while running
+        usleep(50000);
     }
 
     destroyClk(false);

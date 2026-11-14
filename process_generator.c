@@ -6,6 +6,7 @@ pid_t scheduler_pid = -1;
 
 void clearResources(int signum)
 {
+    (void)signum;
     if (msg_queue_id != -1)
     {
         msgctl(msg_queue_id, IPC_RMID, NULL);
@@ -15,21 +16,21 @@ void clearResources(int signum)
     exit(0);
 }
 
-
 int compareProcesses(const void *a, const void *b)
 {
     ProcessData *p1 = (ProcessData *)a;
     ProcessData *p2 = (ProcessData *)b;
     if (p1->arrival_time != p2->arrival_time)
+    {
         return p1->arrival_time - p2->arrival_time;
+    }
     return p1->id - p2->id;
 }
-
 
 int readProcesses(const char *filename, ProcessData processes[])
 {
     FILE *file = fopen(filename, "r");
-    if (!file)
+    if (file == NULL)
     {
         printf("Error: Could not open %s\n", filename);
         return 0;
@@ -40,9 +41,10 @@ int readProcesses(const char *filename, ProcessData processes[])
 
     while (fgets(line, sizeof(line), file))
     {
-        
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
+        {
             continue;
+        }
 
         int id, arrival, runtime, priority;
         if (sscanf(line, "%d %d %d %d", &id, &arrival, &runtime, &priority) == 4)
@@ -58,23 +60,25 @@ int readProcesses(const char *filename, ProcessData processes[])
 
     fclose(file);
 
-    
     qsort(processes, count, sizeof(ProcessData), compareProcesses);
     return count;
 }
 
-
 void readResources(const char *filename, ProcessData processes[], int count)
 {
     FILE *file = fopen(filename, "r");
-    if (!file)
-        return; 
+    if (file == NULL)
+    {
+        return;
+    }
 
     char line[256];
     while (fgets(line, sizeof(line), file))
     {
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
+        {
             continue;
+        }
 
         int pid, capture, release;
         char resource_id[MAX_RESOURCE_NAME_LEN];
@@ -103,11 +107,12 @@ void readResources(const char *filename, ProcessData processes[], int count)
     fclose(file);
 }
 
-int main(int argc, char * argv[])
+int main(int argc, char *argv[])
 {
+    (void)argc;
+    (void)argv;
     signal(SIGINT, clearResources);
 
-    
     ProcessData processes[MAX_PROCESSES];
     int total_processes = readProcesses("processes.txt", processes);
     if (total_processes <= 0)
@@ -119,7 +124,6 @@ int main(int argc, char * argv[])
     readResources("resources.txt", processes, total_processes);
     printf("Successfully loaded %d processes.\n", total_processes);
 
-    
     int chosen_algo = 1;
     int quantum = 3;
     int context_switch_time = 1;
@@ -156,19 +160,20 @@ int main(int argc, char * argv[])
     }
     else
     {
-        
         context_switch_time = 1;
     }
 
-    
-    
     int existing_qid = msgget(PROCESS_MSG_KEY, 0666);
     if (existing_qid != -1)
+    {
         msgctl(existing_qid, IPC_RMID, NULL);
+    }
 
     int existing_shmid = shmget(SHKEY, 4, 0666);
     if (existing_shmid != -1)
+    {
         shmctl(existing_shmid, IPC_RMID, NULL);
+    }
 
     msg_queue_id = msgget(PROCESS_MSG_KEY, IPC_CREAT | 0666);
     if (msg_queue_id == -1)
@@ -177,7 +182,6 @@ int main(int argc, char * argv[])
         exit(-1);
     }
 
-    
     clk_pid = fork();
     if (clk_pid == 0)
     {
@@ -186,7 +190,6 @@ int main(int argc, char * argv[])
         exit(-1);
     }
 
-    
     initClk();
 
     scheduler_pid = fork();
@@ -203,7 +206,6 @@ int main(int argc, char * argv[])
         exit(-1);
     }
 
-    
     int sent_count = 0;
     while (sent_count < total_processes)
     {
@@ -222,14 +224,12 @@ int main(int argc, char * argv[])
             sent_count++;
         }
 
-        usleep(2000); 
+        usleep(2000);
     }
 
-    
     int status;
     waitpid(scheduler_pid, &status, 0);
 
-    
     clearResources(0);
     return 0;
 }
