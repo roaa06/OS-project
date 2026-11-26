@@ -6,6 +6,7 @@ pid_t scheduler_pid = -1;
 
 void clearResources(int signum)
 {
+    signal(SIGINT, SIG_IGN);
     (void)signum;
     if (msg_queue_id != -1)
     {
