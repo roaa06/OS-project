@@ -178,6 +178,48 @@ void readyQueuePush(PCB *p)
     ready_count++;
 }
 
+bool isBetterProcess(PCB *candidate, PCB *current_best)
+{
+    if (chosen_algo == ALGO_SJF)
+    {
+        if (candidate->data.runtime < current_best->data.runtime)
+        {
+            return true;
+        }
+        if (candidate->data.runtime == current_best->data.runtime)
+        {
+            if (candidate->data.arrival_time < current_best->data.arrival_time)
+            {
+                return true;
+            }
+            if (candidate->data.arrival_time == current_best->data.arrival_time &&
+                candidate->data.id < current_best->data.id)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    else // HPF or HPF Demotion
+    {
+        int cand_prio = getActivePriority(candidate);
+        int best_prio = getActivePriority(current_best);
+
+        if (cand_prio < best_prio)
+        {
+            return true;
+        }
+        if (cand_prio == best_prio)
+        {
+            if (candidate->data.id < current_best->data.id)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
 PCB *readyQueuePeekBest(void)
 {
     if (ready_head == NULL)
@@ -194,45 +236,7 @@ PCB *readyQueuePeekBest(void)
 
     while (curr != NULL)
     {
-        bool is_better = false;
-        if (chosen_algo == ALGO_SJF)
-        {
-            if (curr->pcb->data.runtime < best_node->pcb->data.runtime)
-            {
-                is_better = true;
-            }
-            else if (curr->pcb->data.runtime == best_node->pcb->data.runtime)
-            {
-                if (curr->pcb->data.arrival_time < best_node->pcb->data.arrival_time)
-                {
-                    is_better = true;
-                }
-                else if (curr->pcb->data.arrival_time == best_node->pcb->data.arrival_time &&
-                         curr->pcb->data.id < best_node->pcb->data.id)
-                {
-                    is_better = true;
-                }
-            }
-        }
-        else // HPF or HPF Demotion
-        {
-            int curr_prio = getActivePriority(curr->pcb);
-            int best_prio = getActivePriority(best_node->pcb);
-
-            if (curr_prio < best_prio)
-            {
-                is_better = true;
-            }
-            else if (curr_prio == best_prio)
-            {
-                if (curr->pcb->data.id < best_node->pcb->data.id)
-                {
-                    is_better = true;
-                }
-            }
-        }
-
-        if (is_better)
+        if (isBetterProcess(curr->pcb, best_node->pcb))
         {
             best_node = curr;
         }
@@ -269,45 +273,7 @@ PCB *readyQueuePopBest(void)
 
     while (curr != NULL)
     {
-        bool is_better = false;
-        if (chosen_algo == ALGO_SJF)
-        {
-            if (curr->pcb->data.runtime < best_node->pcb->data.runtime)
-            {
-                is_better = true;
-            }
-            else if (curr->pcb->data.runtime == best_node->pcb->data.runtime)
-            {
-                if (curr->pcb->data.arrival_time < best_node->pcb->data.arrival_time)
-                {
-                    is_better = true;
-                }
-                else if (curr->pcb->data.arrival_time == best_node->pcb->data.arrival_time &&
-                         curr->pcb->data.id < best_node->pcb->data.id)
-                {
-                    is_better = true;
-                }
-            }
-        }
-        else // HPF or HPF Demotion
-        {
-            int curr_prio = getActivePriority(curr->pcb);
-            int best_prio = getActivePriority(best_node->pcb);
-
-            if (curr_prio < best_prio)
-            {
-                is_better = true;
-            }
-            else if (curr_prio == best_prio)
-            {
-                if (curr->pcb->data.id < best_node->pcb->data.id)
-                {
-                    is_better = true;
-                }
-            }
-        }
-
-        if (is_better)
+        if (isBetterProcess(curr->pcb, best_node->pcb))
         {
             best_node = curr;
             best_prev = prev;
