@@ -35,5 +35,6 @@ int main(int argc, char *argv[])
     }
 
     destroyClk(false);
+    kill(getppid(), SIGUSR1);
     return 0;
 }

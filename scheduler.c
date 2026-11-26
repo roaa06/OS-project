@@ -36,12 +36,21 @@ int system_resource_count = 0;
 
 SysResource *getOrCreateResource(const char *res_id)
 {
+    if (!res_id || res_id[0] == '\0')
+    {
+        return NULL;
+    }
     for (int i = 0; i < system_resource_count; i++)
     {
         if (strcmp(system_resources[i].id, res_id) == 0)
         {
             return &system_resources[i];
         }
+    }
+    if (system_resource_count >= MAX_PROCESSES * MAX_RESOURCES_PER_PROCESS)
+    {
+        fprintf(stderr, "Warning: system_resources overflow\n");
+        return NULL;
     }
     SysResource *r = &system_resources[system_resource_count++];
     strncpy(r->id, res_id, MAX_RESOURCE_NAME_LEN - 1);
@@ -116,6 +125,11 @@ void updateInheritedPriority(PCB *holder)
 
 void readyQueuePush(PCB *p)
 {
+    if (ready_count >= MAX_PROCESSES)
+    {
+        fprintf(stderr, "Warning: ready_queue overflow\n");
+        return;
+    }
     p->state = STATE_READY;
     ready_queue[ready_count++] = p;
 }
@@ -132,6 +146,7 @@ PCB *readyQueuePopAt(int index)
         ready_queue[i] = ready_queue[i + 1];
     }
     ready_count--;
+    ready_queue[ready_count] = NULL;
     return p;
 }
 
@@ -305,9 +320,9 @@ void generatePerfReport(int finish_time)
         sum_wait += wait;
     }
 
-    double cpu_util = ((double)total_runtime / finish_time) * 100.0;
-    double avg_wta = sum_wta / all_pcb_count;
-    double avg_wait = (double)sum_wait / all_pcb_count;
+    int cpu_util = (finish_time > 0) ? ((total_runtime * 100) / finish_time) : 0;
+    double avg_wta = (all_pcb_count > 0) ? (sum_wta / all_pcb_count) : 0.0;
+    int avg_wait = (all_pcb_count > 0) ? (sum_wait / all_pcb_count) : 0;
 
     double variance = 0.0;
     for (int i = 0; i < all_pcb_count; i++)
@@ -317,15 +332,23 @@ void generatePerfReport(int finish_time)
         double wta = (double)ta / p->data.runtime;
         variance += (wta - avg_wta) * (wta - avg_wta);
     }
-    variance /= all_pcb_count;
+    if (all_pcb_count > 0)
+    {
+        variance /= all_pcb_count;
+    }
     double std_wta = sqrt(variance);
 
-    fprintf(perf_file, "CPU utilization = %d%%\n", (int)floor(cpu_util));
+    fprintf(perf_file, "CPU utilization = %d%%\n", cpu_util);
     fprintf(perf_file, "Avg WTA = %.2f\n", avg_wta);
-    fprintf(perf_file, "Avg Waiting = %d\n", (int)floor(avg_wait));
+    fprintf(perf_file, "Avg Waiting = %d\n", avg_wait);
     fprintf(perf_file, "Std WTA = %.2f\n", std_wta);
 
     fclose(perf_file);
+}
+
+void handleChildTermination(int sig)
+{
+    (void)sig;
 }
 
 int main(int argc, char *argv[])
@@ -337,6 +360,12 @@ int main(int argc, char *argv[])
         quantum = atoi(argv[3]);
         context_switch_time = atoi(argv[4]);
     }
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handleChildTermination;
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGUSR1, &sa, NULL);
 
     initClk();
 
@@ -413,93 +442,110 @@ int main(int argc, char *argv[])
             {
                 PCB *curr = running_pcb;
 
-                if (curr->holds_resource)
+                if (chosen_algo >= ALGO_HPF)
                 {
-                    int r_idx = curr->current_resource_idx;
-                    if (r_idx < curr->data.resource_count &&
-                        curr->execution_time == curr->data.resources[r_idx].release_time)
+                    if (curr->holds_resource)
                     {
-                        SysResource *res = getOrCreateResource(curr->held_resource_id);
-                        res->is_held = false;
-                        res->holder_id = -1;
-
-                        curr->holds_resource = false;
-                        curr->held_resource_id[0] = '\0';
-                        curr->inherited_priority = -1;
-                        curr->current_resource_idx++;
-
-                        int best_blocked_idx = -1;
-                        for (int i = 0; i < blocked_count; i++)
+                        int r_idx = curr->current_resource_idx;
+                        if (r_idx < curr->data.resource_count &&
+                            curr->execution_time == curr->data.resources[r_idx].release_time)
                         {
-                            PCB *b = blocked_queue[i];
-                            int br_idx = b->current_resource_idx;
-                            if (br_idx < b->data.resource_count &&
-                                strcmp(b->data.resources[br_idx].resource_id, res->id) == 0)
+                            SysResource *res = getOrCreateResource(curr->held_resource_id);
+                            if (res)
                             {
-                                if (best_blocked_idx == -1)
+                                res->is_held = false;
+                                res->holder_id = -1;
+                            }
+
+                            curr->holds_resource = false;
+                            curr->held_resource_id[0] = '\0';
+                            curr->inherited_priority = -1;
+                            curr->current_resource_idx++;
+
+                            int best_blocked_idx = -1;
+                            for (int i = 0; i < blocked_count; i++)
+                            {
+                                PCB *b = blocked_queue[i];
+                                int br_idx = b->current_resource_idx;
+                                if (br_idx < b->data.resource_count && res &&
+                                    strcmp(b->data.resources[br_idx].resource_id, res->id) == 0)
                                 {
-                                    best_blocked_idx = i;
-                                }
-                                else
-                                {
-                                    int p1 = b->original_priority;
-                                    int p2 = blocked_queue[best_blocked_idx]->original_priority;
-                                    if (p1 < p2 || (p1 == p2 && b->data.id < blocked_queue[best_blocked_idx]->data.id))
+                                    if (best_blocked_idx == -1)
                                     {
                                         best_blocked_idx = i;
                                     }
+                                    else
+                                    {
+                                        int p1 = b->original_priority;
+                                        int p2 = blocked_queue[best_blocked_idx]->original_priority;
+                                        if (p1 < p2 || (p1 == p2 && b->data.id < blocked_queue[best_blocked_idx]->data.id))
+                                        {
+                                            best_blocked_idx = i;
+                                        }
+                                    }
                                 }
                             }
-                        }
 
-                        if (best_blocked_idx != -1)
-                        {
-                            PCB *unblocked = blocked_queue[best_blocked_idx];
-
-                            for (int i = best_blocked_idx; i < blocked_count - 1; i++)
+                            if (best_blocked_idx != -1)
                             {
-                                blocked_queue[i] = blocked_queue[i + 1];
+                                PCB *unblocked = blocked_queue[best_blocked_idx];
+
+                                for (int i = best_blocked_idx; i < blocked_count - 1; i++)
+                                {
+                                    blocked_queue[i] = blocked_queue[i + 1];
+                                }
+                                blocked_count--;
+                                blocked_queue[blocked_count] = NULL;
+
+                                if (res)
+                                {
+                                    res->is_held = true;
+                                    res->holder_id = unblocked->data.id;
+                                    unblocked->holds_resource = true;
+                                    strncpy(unblocked->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
+                                    updateInheritedPriority(unblocked);
+                                }
+
+                                readyQueuePush(unblocked);
                             }
-                            blocked_count--;
-
-                            res->is_held = true;
-                            res->holder_id = unblocked->data.id;
-                            unblocked->holds_resource = true;
-                            strncpy(unblocked->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
-                            updateInheritedPriority(unblocked);
-
-                            readyQueuePush(unblocked);
                         }
                     }
-                }
 
-                if (!curr->holds_resource && curr->current_resource_idx < curr->data.resource_count)
-                {
-                    int r_idx = curr->current_resource_idx;
-                    if (curr->execution_time == curr->data.resources[r_idx].capture_time)
+                    if (!curr->holds_resource && curr->current_resource_idx < curr->data.resource_count)
                     {
-                        SysResource *res = getOrCreateResource(curr->data.resources[r_idx].resource_id);
-                        if (!res->is_held)
+                        int r_idx = curr->current_resource_idx;
+                        if (curr->execution_time == curr->data.resources[r_idx].capture_time)
                         {
-                            res->is_held = true;
-                            res->holder_id = curr->data.id;
-                            curr->holds_resource = true;
-                            strncpy(curr->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
-                            updateInheritedPriority(curr);
-                        }
-                        else
-                        {
-                            stopProcess(curr, sim_time);
-                            curr->state = STATE_BLOCKED;
-                            blocked_queue[blocked_count++] = curr;
-                            running_pcb = NULL;
-
-                            for (int i = 0; i < all_pcb_count; i++)
+                            SysResource *res = getOrCreateResource(curr->data.resources[r_idx].resource_id);
+                            if (res && !res->is_held)
                             {
-                                if (all_pcbs[i].data.id == res->holder_id)
+                                res->is_held = true;
+                                res->holder_id = curr->data.id;
+                                curr->holds_resource = true;
+                                strncpy(curr->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
+                                updateInheritedPriority(curr);
+                            }
+                            else if (res)
+                            {
+                                stopProcess(curr, sim_time);
+                                curr->state = STATE_BLOCKED;
+                                if (blocked_count < MAX_PROCESSES)
                                 {
-                                    updateInheritedPriority(&all_pcbs[i]);
-                                    break;
+                                    blocked_queue[blocked_count++] = curr;
+                                }
+                                else
+                                {
+                                    fprintf(stderr, "Warning: blocked_queue overflow\n");
+                                }
+                                running_pcb = NULL;
+
+                                for (int i = 0; i < all_pcb_count; i++)
+                                {
+                                    if (all_pcbs[i].data.id == res->holder_id)
+                                    {
+                                        updateInheritedPriority(&all_pcbs[i]);
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -517,11 +563,14 @@ int main(int argc, char *argv[])
                     logProcessEvent(sim_time, curr, "finished");
                     completed_processes++;
 
-                    if (curr->holds_resource)
+                    if (chosen_algo >= ALGO_HPF && curr->holds_resource)
                     {
                         SysResource *res = getOrCreateResource(curr->held_resource_id);
-                        res->is_held = false;
-                        res->holder_id = -1;
+                        if (res)
+                        {
+                            res->is_held = false;
+                            res->holder_id = -1;
+                        }
                         curr->holds_resource = false;
                     }
 
@@ -532,6 +581,11 @@ int main(int argc, char *argv[])
             ProcessMessage msg;
             while (msgrcv(msg_queue_id, &msg, sizeof(ProcessData), 1, IPC_NOWAIT) != -1)
             {
+                if (all_pcb_count >= MAX_PROCESSES)
+                {
+                    fprintf(stderr, "Warning: Maximum processes (%d) reached in all_pcbs\n", MAX_PROCESSES);
+                    break;
+                }
                 PCB *p = &all_pcbs[all_pcb_count++];
                 p->data = msg.process;
                 p->pid = -1;

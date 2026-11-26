@@ -49,6 +49,11 @@ int readProcesses(const char *filename, ProcessData processes[])
         int id, arrival, runtime, priority;
         if (sscanf(line, "%d %d %d %d", &id, &arrival, &runtime, &priority) == 4)
         {
+            if (count >= MAX_PROCESSES)
+            {
+                fprintf(stderr, "Warning: Maximum processes (%d) reached in readProcesses\n", MAX_PROCESSES);
+                break;
+            }
             processes[count].id = id;
             processes[count].arrival_time = arrival;
             processes[count].runtime = runtime;
@@ -121,7 +126,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    readResources("resources.txt", processes, total_processes);
     printf("Successfully loaded %d processes.\n", total_processes);
 
     int chosen_algo = 1;
@@ -140,6 +144,11 @@ int main(int argc, char *argv[])
     {
         chosen_algo = 1;
         printf("Invalid input. Defaulting to 1 (SJF).\n");
+    }
+
+    if (chosen_algo >= ALGO_HPF)
+    {
+        readResources("resources.txt", processes, total_processes);
     }
 
     if (chosen_algo == ALGO_RR)
