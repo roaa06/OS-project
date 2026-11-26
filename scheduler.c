@@ -562,6 +562,7 @@ void releaseHeldResource(PCB *curr)
             res->holder_id = unblocked->data.id;
             unblocked->holds_resource = true;
             strncpy(unblocked->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
+            unblocked->held_resource_id[MAX_RESOURCE_NAME_LEN - 1] = '\0';
             updateInheritedPriority(unblocked);
         }
 
@@ -604,6 +605,7 @@ void handleResources(int sim_time)
                 res->holder_id = curr->data.id;
                 curr->holds_resource = true;
                 strncpy(curr->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
+                curr->held_resource_id[MAX_RESOURCE_NAME_LEN - 1] = '\0';
                 updateInheritedPriority(curr);
             }
             else if (res)
