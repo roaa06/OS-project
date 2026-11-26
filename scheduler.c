@@ -265,6 +265,20 @@ void stopProcess(PCB *p, int current_time)
     }
 }
 
+void scheduleNext(PCB *next, int current_time)
+{
+    if (context_switch_time == 0 || cpu_was_idle)
+    {
+        dispatchProcess(next, current_time);
+        cpu_was_idle = false;
+    }
+    else
+    {
+        switching_to_pcb = next;
+        cs_remaining = context_switch_time;
+    }
+}
+
 void generatePerfReport(int finish_time)
 {
     FILE *perf_file = fopen("scheduler.perf", "w");
@@ -549,17 +563,7 @@ int main(int argc, char *argv[])
                 {
                     int next_idx = selectNextProcessIndex();
                     PCB *next = readyQueuePopAt(next_idx);
-
-                    if (cpu_was_idle)
-                    {
-                        dispatchProcess(next, sim_time);
-                        cpu_was_idle = false;
-                    }
-                    else
-                    {
-                        switching_to_pcb = next;
-                        cs_remaining = context_switch_time;
-                    }
+                    scheduleNext(next, sim_time);
                 }
                 else if (running_pcb == NULL && ready_count == 0)
                 {
@@ -580,8 +584,7 @@ int main(int argc, char *argv[])
                             running_pcb = NULL;
 
                             PCB *next = readyQueuePopAt(selectNextProcessIndex());
-                            switching_to_pcb = next;
-                            cs_remaining = context_switch_time;
+                            scheduleNext(next, sim_time);
                         }
                         else
                         {
@@ -592,16 +595,7 @@ int main(int argc, char *argv[])
                 else if (ready_count > 0)
                 {
                     PCB *next = readyQueuePopAt(selectNextProcessIndex());
-                    if (cpu_was_idle)
-                    {
-                        dispatchProcess(next, sim_time);
-                        cpu_was_idle = false;
-                    }
-                    else
-                    {
-                        switching_to_pcb = next;
-                        cs_remaining = context_switch_time;
-                    }
+                    scheduleNext(next, sim_time);
                 }
                 else
                 {
@@ -628,24 +622,14 @@ int main(int argc, char *argv[])
                             running_pcb = NULL;
 
                             PCB *next = readyQueuePopAt(selectNextProcessIndex());
-                            switching_to_pcb = next;
-                            cs_remaining = context_switch_time;
+                            scheduleNext(next, sim_time);
                         }
                     }
                 }
                 else if (ready_count > 0)
                 {
                     PCB *next = readyQueuePopAt(selectNextProcessIndex());
-                    if (cpu_was_idle)
-                    {
-                        dispatchProcess(next, sim_time);
-                        cpu_was_idle = false;
-                    }
-                    else
-                    {
-                        switching_to_pcb = next;
-                        cs_remaining = context_switch_time;
-                    }
+                    scheduleNext(next, sim_time);
                 }
                 else
                 {
