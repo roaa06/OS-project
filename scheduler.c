@@ -98,6 +98,7 @@ int getEffectivePriority(PCB *p)
 int getActivePriority(PCB *p)
 {
     int base_prio = (chosen_algo == ALGO_HPF_DEMOTION) ? getEffectivePriority(p) : p->original_priority;
+    p->effective_priority = base_prio;
 
     if (p->holds_resource && p->inherited_priority != -1)
     {
@@ -542,12 +543,56 @@ void handleFinish(int sim_time, int *last_finish_time)
     }
 }
 
-// Phase 4: Receive arriving processes from IPC message queue
-void receiveArrivals(void)
+static bool has_pending_arrival = false;
+static ProcessMessage pending_arrival_msg;
+
+// Phase 4: Receive arriving processes from IPC message queue (guarding against early clock arrivals)
+void receiveArrivals(int sim_time)
 {
+    if (has_pending_arrival)
+    {
+        if (pending_arrival_msg.process.arrival_time <= sim_time)
+        {
+            if (all_pcb_count >= MAX_PROCESSES)
+            {
+                fatalError("Process table capacity exceeded (MAX_PROCESSES).");
+            }
+            PCB *p = &all_pcbs[all_pcb_count++];
+            p->data = pending_arrival_msg.process;
+            p->pid = -1;
+            p->state = STATE_READY;
+            p->remaining_time = pending_arrival_msg.process.runtime;
+            p->execution_time = 0;
+            p->wait_time = 0;
+            p->start_time = -1;
+            p->finish_time = -1;
+            p->original_priority = pending_arrival_msg.process.priority;
+            p->inherited_priority = -1;
+            p->effective_priority = pending_arrival_msg.process.priority;
+            p->consecutive_ready_time = 0;
+            p->current_resource_idx = 0;
+            p->holds_resource = false;
+            p->held_resource_id[0] = '\0';
+
+            readyQueuePush(p);
+            has_pending_arrival = false;
+        }
+        else
+        {
+            return;
+        }
+    }
+
     ProcessMessage msg;
     while (msgrcv(msg_queue_id, &msg, sizeof(ProcessData), 1, IPC_NOWAIT) != -1)
     {
+        if (msg.process.arrival_time > sim_time)
+        {
+            pending_arrival_msg = msg;
+            has_pending_arrival = true;
+            break;
+        }
+
         if (all_pcb_count >= MAX_PROCESSES)
         {
             fatalError("Process table capacity exceeded (MAX_PROCESSES).");
@@ -714,9 +759,14 @@ int main(int argc, char *argv[])
             tickAccounting(sim_time);
             handleResources(sim_time);
             handleFinish(sim_time, &last_finish_time);
-            receiveArrivals();
+            receiveArrivals(sim_time);
             scheduleProcesses(sim_time);
         }
+    }
+
+    if (termination_signals_received < total_processes)
+    {
+        usleep(10000);
     }
 
     fclose(log_file);

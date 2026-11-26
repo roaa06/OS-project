@@ -88,7 +88,7 @@ void readResources(const char *filename, ProcessData processes[], int count)
         int pid, capture, release;
         char resource_id[MAX_RESOURCE_NAME_LEN];
 
-        if (sscanf(line, "%d %s %d %d", &pid, resource_id, &capture, &release) == 4)
+        if (sscanf(line, "%d %31s %d %d", &pid, resource_id, &capture, &release) == 4)
         {
             for (int i = 0; i < count; i++)
             {
@@ -110,19 +110,37 @@ void readResources(const char *filename, ProcessData processes[], int count)
     }
 
     fclose(file);
+
+    // Sort each process's resource requests chronologically by capture_time
+    for (int i = 0; i < count; i++)
+    {
+        for (int j = 0; j < processes[i].resource_count - 1; j++)
+        {
+            for (int k = j + 1; k < processes[i].resource_count; k++)
+            {
+                if (processes[i].resources[j].capture_time > processes[i].resources[k].capture_time)
+                {
+                    ResourceReq temp = processes[i].resources[j];
+                    processes[i].resources[j] = processes[i].resources[k];
+                    processes[i].resources[k] = temp;
+                }
+            }
+        }
+    }
 }
 
 int main(int argc, char *argv[])
 {
-    (void)argc;
-    (void)argv;
     signal(SIGINT, clearResources);
 
+    const char *proc_filename = (argc > 1) ? argv[1] : "processes.txt";
+    const char *res_filename = (argc > 2) ? argv[2] : "resources.txt";
+
     ProcessData processes[MAX_PROCESSES];
-    int total_processes = readProcesses("processes.txt", processes);
+    int total_processes = readProcesses(proc_filename, processes);
     if (total_processes <= 0)
     {
-        printf("No processes found in processes.txt!\n");
+        printf("No processes found in %s!\n", proc_filename);
         return 1;
     }
 
@@ -148,7 +166,7 @@ int main(int argc, char *argv[])
 
     if (chosen_algo >= ALGO_HPF)
     {
-        readResources("resources.txt", processes, total_processes);
+        readResources(res_filename, processes, total_processes);
     }
 
     if (chosen_algo == ALGO_RR)

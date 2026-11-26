@@ -18,10 +18,10 @@ int main(int argc, char *argv[])
     }
 
     remainingtime = atoi(argv[1]);
-    signal(SIGCONT, handle_cont);
 
     initClk();
     last_clk = getClk();
+    signal(SIGCONT, handle_cont);
 
     while (remainingtime > 0)
     {
