@@ -24,6 +24,22 @@ int cs_remaining = 0;
 int quantum_remaining = 0;
 bool cpu_was_idle = true;
 
+// Signal notification counter for child termination sanity check
+volatile sig_atomic_t termination_signals_received = 0;
+
+void handleChildTermination(int sig)
+{
+    (void)sig;
+    termination_signals_received++;
+}
+
+void fatalError(const char *msg)
+{
+    fprintf(stderr, "Fatal Error: %s\n", msg);
+    destroyClk(true);
+    exit(1);
+}
+
 typedef struct
 {
     char id[MAX_RESOURCE_NAME_LEN];
@@ -49,8 +65,7 @@ SysResource *getOrCreateResource(const char *res_id)
     }
     if (system_resource_count >= MAX_PROCESSES * MAX_RESOURCES_PER_PROCESS)
     {
-        fprintf(stderr, "Warning: system_resources overflow\n");
-        return NULL;
+        fatalError("system_resources capacity exceeded.");
     }
     SysResource *r = &system_resources[system_resource_count++];
     strncpy(r->id, res_id, MAX_RESOURCE_NAME_LEN - 1);
@@ -82,11 +97,7 @@ int getEffectivePriority(PCB *p)
 
 int getActivePriority(PCB *p)
 {
-    int base_prio = p->original_priority;
-    if (chosen_algo == ALGO_HPF_DEMOTION)
-    {
-        base_prio = getEffectivePriority(p);
-    }
+    int base_prio = (chosen_algo == ALGO_HPF_DEMOTION) ? getEffectivePriority(p) : p->original_priority;
 
     if (p->holds_resource && p->inherited_priority != -1)
     {
@@ -127,8 +138,7 @@ void readyQueuePush(PCB *p)
 {
     if (ready_count >= MAX_PROCESSES)
     {
-        fprintf(stderr, "Warning: ready_queue overflow\n");
-        return;
+        fatalError("Ready queue capacity exceeded (MAX_PROCESSES).");
     }
     p->state = STATE_READY;
     ready_queue[ready_count++] = p;
@@ -346,9 +356,310 @@ void generatePerfReport(int finish_time)
     fclose(perf_file);
 }
 
-void handleChildTermination(int sig)
+/* ========================================================
+ * Modular Phase Handlers
+ * ======================================================== */
+
+// Phase 1: Tick accounting (advances execution, quantum, and aging)
+void tickAccounting(int sim_time)
 {
-    (void)sig;
+    if (cs_remaining > 0)
+    {
+        cs_remaining--;
+        if (cs_remaining == 0 && switching_to_pcb != NULL)
+        {
+            PCB *next = switching_to_pcb;
+            switching_to_pcb = NULL;
+            dispatchProcess(next, sim_time);
+        }
+    }
+    else if (running_pcb != NULL)
+    {
+        running_pcb->execution_time++;
+        running_pcb->remaining_time--;
+        if (chosen_algo == ALGO_RR)
+        {
+            quantum_remaining--;
+        }
+    }
+
+    // Consolidated single loop: advance waiting aging for all processes in ready queue
+    for (int i = 0; i < ready_count; i++)
+    {
+        ready_queue[i]->consecutive_ready_time++;
+    }
+}
+
+// Phase 2: HPF resource release & capture handling
+void handleResources(int sim_time)
+{
+    if (chosen_algo < ALGO_HPF || running_pcb == NULL || cs_remaining > 0)
+    {
+        return;
+    }
+
+    PCB *curr = running_pcb;
+
+    // Resource release
+    if (curr->holds_resource)
+    {
+        int r_idx = curr->current_resource_idx;
+        if (r_idx < curr->data.resource_count &&
+            curr->execution_time == curr->data.resources[r_idx].release_time)
+        {
+            SysResource *res = getOrCreateResource(curr->held_resource_id);
+            if (res)
+            {
+                res->is_held = false;
+                res->holder_id = -1;
+            }
+
+            curr->holds_resource = false;
+            curr->held_resource_id[0] = '\0';
+            curr->inherited_priority = -1;
+            curr->current_resource_idx++;
+
+            int best_blocked_idx = -1;
+            for (int i = 0; i < blocked_count; i++)
+            {
+                PCB *b = blocked_queue[i];
+                int br_idx = b->current_resource_idx;
+                if (br_idx < b->data.resource_count && res &&
+                    strcmp(b->data.resources[br_idx].resource_id, res->id) == 0)
+                {
+                    if (best_blocked_idx == -1)
+                    {
+                        best_blocked_idx = i;
+                    }
+                    else
+                    {
+                        int p1 = b->original_priority;
+                        int p2 = blocked_queue[best_blocked_idx]->original_priority;
+                        if (p1 < p2 || (p1 == p2 && b->data.id < blocked_queue[best_blocked_idx]->data.id))
+                        {
+                            best_blocked_idx = i;
+                        }
+                    }
+                }
+            }
+
+            if (best_blocked_idx != -1)
+            {
+                PCB *unblocked = blocked_queue[best_blocked_idx];
+
+                for (int i = best_blocked_idx; i < blocked_count - 1; i++)
+                {
+                    blocked_queue[i] = blocked_queue[i + 1];
+                }
+                blocked_count--;
+                blocked_queue[blocked_count] = NULL;
+
+                if (res)
+                {
+                    res->is_held = true;
+                    res->holder_id = unblocked->data.id;
+                    unblocked->holds_resource = true;
+                    strncpy(unblocked->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
+                    updateInheritedPriority(unblocked);
+                }
+
+                readyQueuePush(unblocked);
+            }
+        }
+    }
+
+    // Resource capture
+    if (!curr->holds_resource && curr->current_resource_idx < curr->data.resource_count)
+    {
+        int r_idx = curr->current_resource_idx;
+        if (curr->execution_time == curr->data.resources[r_idx].capture_time)
+        {
+            SysResource *res = getOrCreateResource(curr->data.resources[r_idx].resource_id);
+            if (res && !res->is_held)
+            {
+                res->is_held = true;
+                res->holder_id = curr->data.id;
+                curr->holds_resource = true;
+                strncpy(curr->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
+                updateInheritedPriority(curr);
+            }
+            else if (res)
+            {
+                stopProcess(curr, sim_time);
+                curr->state = STATE_BLOCKED;
+                if (blocked_count >= MAX_PROCESSES)
+                {
+                    fatalError("Blocked queue capacity exceeded (MAX_PROCESSES).");
+                }
+                blocked_queue[blocked_count++] = curr;
+                running_pcb = NULL;
+
+                for (int i = 0; i < all_pcb_count; i++)
+                {
+                    if (all_pcbs[i].data.id == res->holder_id)
+                    {
+                        updateInheritedPriority(&all_pcbs[i]);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Phase 3: Process finish handling
+void handleFinish(int sim_time, int *last_finish_time)
+{
+    if (running_pcb == NULL || cs_remaining > 0)
+    {
+        return;
+    }
+
+    PCB *curr = running_pcb;
+    if (curr->remaining_time == 0)
+    {
+        int status;
+        waitpid(curr->pid, &status, 0);
+
+        curr->state = STATE_FINISHED;
+        curr->finish_time = sim_time;
+        *last_finish_time = sim_time;
+        logProcessEvent(sim_time, curr, "finished");
+        completed_processes++;
+
+        if (chosen_algo >= ALGO_HPF && curr->holds_resource)
+        {
+            SysResource *res = getOrCreateResource(curr->held_resource_id);
+            if (res)
+            {
+                res->is_held = false;
+                res->holder_id = -1;
+            }
+            curr->holds_resource = false;
+        }
+
+        running_pcb = NULL;
+    }
+}
+
+// Phase 4: Receive arriving processes from IPC message queue
+void receiveArrivals(void)
+{
+    ProcessMessage msg;
+    while (msgrcv(msg_queue_id, &msg, sizeof(ProcessData), 1, IPC_NOWAIT) != -1)
+    {
+        if (all_pcb_count >= MAX_PROCESSES)
+        {
+            fatalError("Process table capacity exceeded (MAX_PROCESSES).");
+        }
+        PCB *p = &all_pcbs[all_pcb_count++];
+        p->data = msg.process;
+        p->pid = -1;
+        p->state = STATE_READY;
+        p->remaining_time = msg.process.runtime;
+        p->execution_time = 0;
+        p->wait_time = 0;
+        p->start_time = -1;
+        p->finish_time = -1;
+        p->original_priority = msg.process.priority;
+        p->inherited_priority = -1;
+        p->effective_priority = msg.process.priority;
+        p->consecutive_ready_time = 0;
+        p->current_resource_idx = 0;
+        p->holds_resource = false;
+        p->held_resource_id[0] = '\0';
+
+        readyQueuePush(p);
+    }
+}
+
+// Phase 5: Algorithm scheduling dispatch and preemption
+void scheduleProcesses(int sim_time)
+{
+    if (cs_remaining > 0)
+    {
+        return;
+    }
+
+    if (chosen_algo == ALGO_SJF)
+    {
+        if (running_pcb == NULL && ready_count > 0)
+        {
+            int next_idx = selectNextProcessIndex();
+            PCB *next = readyQueuePopAt(next_idx);
+            scheduleNext(next, sim_time);
+        }
+        else if (running_pcb == NULL && ready_count == 0)
+        {
+            cpu_was_idle = true;
+        }
+    }
+    else if (chosen_algo == ALGO_RR)
+    {
+        if (running_pcb != NULL)
+        {
+            if (quantum_remaining <= 0)
+            {
+                if (ready_count > 0)
+                {
+                    PCB *preempted = running_pcb;
+                    stopProcess(preempted, sim_time);
+                    readyQueuePush(preempted);
+                    running_pcb = NULL;
+
+                    PCB *next = readyQueuePopAt(selectNextProcessIndex());
+                    scheduleNext(next, sim_time);
+                }
+                else
+                {
+                    quantum_remaining = quantum;
+                }
+            }
+        }
+        else if (ready_count > 0)
+        {
+            PCB *next = readyQueuePopAt(selectNextProcessIndex());
+            scheduleNext(next, sim_time);
+        }
+        else
+        {
+            cpu_was_idle = true;
+        }
+    }
+    else // HPF or HPF Bonus Demotion
+    {
+        if (running_pcb != NULL)
+        {
+            if (ready_count > 0)
+            {
+                int next_idx = selectNextProcessIndex();
+                PCB *best_ready = ready_queue[next_idx];
+
+                int ready_prio = getActivePriority(best_ready);
+                int running_prio = getActivePriority(running_pcb);
+
+                if (ready_prio < running_prio)
+                {
+                    PCB *preempted = running_pcb;
+                    stopProcess(preempted, sim_time);
+                    readyQueuePush(preempted);
+                    running_pcb = NULL;
+
+                    PCB *next = readyQueuePopAt(selectNextProcessIndex());
+                    scheduleNext(next, sim_time);
+                }
+            }
+        }
+        else if (ready_count > 0)
+        {
+            PCB *next = readyQueuePopAt(selectNextProcessIndex());
+            scheduleNext(next, sim_time);
+        }
+        else
+        {
+            cpu_was_idle = true;
+        }
+    }
 }
 
 int main(int argc, char *argv[])
@@ -400,296 +711,11 @@ int main(int argc, char *argv[])
             sim_time++;
             usleep(30000);
 
-            if (cs_remaining > 0)
-            {
-                for (int i = 0; i < ready_count; i++)
-                {
-                    ready_queue[i]->consecutive_ready_time++;
-                }
-
-                cs_remaining--;
-                if (cs_remaining == 0 && switching_to_pcb != NULL)
-                {
-                    PCB *next = switching_to_pcb;
-                    switching_to_pcb = NULL;
-                    dispatchProcess(next, sim_time);
-                    cpu_was_idle = false;
-                }
-            }
-            else if (running_pcb != NULL)
-            {
-                running_pcb->execution_time++;
-                running_pcb->remaining_time--;
-                if (chosen_algo == ALGO_RR)
-                {
-                    quantum_remaining--;
-                }
-
-                for (int i = 0; i < ready_count; i++)
-                {
-                    ready_queue[i]->consecutive_ready_time++;
-                }
-            }
-            else
-            {
-                for (int i = 0; i < ready_count; i++)
-                {
-                    ready_queue[i]->consecutive_ready_time++;
-                }
-            }
-
-            if (running_pcb != NULL && cs_remaining == 0)
-            {
-                PCB *curr = running_pcb;
-
-                if (chosen_algo >= ALGO_HPF)
-                {
-                    if (curr->holds_resource)
-                    {
-                        int r_idx = curr->current_resource_idx;
-                        if (r_idx < curr->data.resource_count &&
-                            curr->execution_time == curr->data.resources[r_idx].release_time)
-                        {
-                            SysResource *res = getOrCreateResource(curr->held_resource_id);
-                            if (res)
-                            {
-                                res->is_held = false;
-                                res->holder_id = -1;
-                            }
-
-                            curr->holds_resource = false;
-                            curr->held_resource_id[0] = '\0';
-                            curr->inherited_priority = -1;
-                            curr->current_resource_idx++;
-
-                            int best_blocked_idx = -1;
-                            for (int i = 0; i < blocked_count; i++)
-                            {
-                                PCB *b = blocked_queue[i];
-                                int br_idx = b->current_resource_idx;
-                                if (br_idx < b->data.resource_count && res &&
-                                    strcmp(b->data.resources[br_idx].resource_id, res->id) == 0)
-                                {
-                                    if (best_blocked_idx == -1)
-                                    {
-                                        best_blocked_idx = i;
-                                    }
-                                    else
-                                    {
-                                        int p1 = b->original_priority;
-                                        int p2 = blocked_queue[best_blocked_idx]->original_priority;
-                                        if (p1 < p2 || (p1 == p2 && b->data.id < blocked_queue[best_blocked_idx]->data.id))
-                                        {
-                                            best_blocked_idx = i;
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (best_blocked_idx != -1)
-                            {
-                                PCB *unblocked = blocked_queue[best_blocked_idx];
-
-                                for (int i = best_blocked_idx; i < blocked_count - 1; i++)
-                                {
-                                    blocked_queue[i] = blocked_queue[i + 1];
-                                }
-                                blocked_count--;
-                                blocked_queue[blocked_count] = NULL;
-
-                                if (res)
-                                {
-                                    res->is_held = true;
-                                    res->holder_id = unblocked->data.id;
-                                    unblocked->holds_resource = true;
-                                    strncpy(unblocked->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
-                                    updateInheritedPriority(unblocked);
-                                }
-
-                                readyQueuePush(unblocked);
-                            }
-                        }
-                    }
-
-                    if (!curr->holds_resource && curr->current_resource_idx < curr->data.resource_count)
-                    {
-                        int r_idx = curr->current_resource_idx;
-                        if (curr->execution_time == curr->data.resources[r_idx].capture_time)
-                        {
-                            SysResource *res = getOrCreateResource(curr->data.resources[r_idx].resource_id);
-                            if (res && !res->is_held)
-                            {
-                                res->is_held = true;
-                                res->holder_id = curr->data.id;
-                                curr->holds_resource = true;
-                                strncpy(curr->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
-                                updateInheritedPriority(curr);
-                            }
-                            else if (res)
-                            {
-                                stopProcess(curr, sim_time);
-                                curr->state = STATE_BLOCKED;
-                                if (blocked_count < MAX_PROCESSES)
-                                {
-                                    blocked_queue[blocked_count++] = curr;
-                                }
-                                else
-                                {
-                                    fprintf(stderr, "Warning: blocked_queue overflow\n");
-                                }
-                                running_pcb = NULL;
-
-                                for (int i = 0; i < all_pcb_count; i++)
-                                {
-                                    if (all_pcbs[i].data.id == res->holder_id)
-                                    {
-                                        updateInheritedPriority(&all_pcbs[i]);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (curr->remaining_time == 0)
-                {
-                    int status;
-                    waitpid(curr->pid, &status, 0);
-
-                    curr->state = STATE_FINISHED;
-                    curr->finish_time = sim_time;
-                    last_finish_time = sim_time;
-                    logProcessEvent(sim_time, curr, "finished");
-                    completed_processes++;
-
-                    if (chosen_algo >= ALGO_HPF && curr->holds_resource)
-                    {
-                        SysResource *res = getOrCreateResource(curr->held_resource_id);
-                        if (res)
-                        {
-                            res->is_held = false;
-                            res->holder_id = -1;
-                        }
-                        curr->holds_resource = false;
-                    }
-
-                    running_pcb = NULL;
-                }
-            }
-
-            ProcessMessage msg;
-            while (msgrcv(msg_queue_id, &msg, sizeof(ProcessData), 1, IPC_NOWAIT) != -1)
-            {
-                if (all_pcb_count >= MAX_PROCESSES)
-                {
-                    fprintf(stderr, "Warning: Maximum processes (%d) reached in all_pcbs\n", MAX_PROCESSES);
-                    break;
-                }
-                PCB *p = &all_pcbs[all_pcb_count++];
-                p->data = msg.process;
-                p->pid = -1;
-                p->state = STATE_READY;
-                p->remaining_time = msg.process.runtime;
-                p->execution_time = 0;
-                p->wait_time = 0;
-                p->start_time = -1;
-                p->finish_time = -1;
-                p->original_priority = msg.process.priority;
-                p->inherited_priority = -1;
-                p->effective_priority = msg.process.priority;
-                p->consecutive_ready_time = 0;
-                p->current_resource_idx = 0;
-                p->holds_resource = false;
-                p->held_resource_id[0] = '\0';
-
-                readyQueuePush(p);
-            }
-
-            if (cs_remaining > 0)
-            {
-                continue;
-            }
-
-            if (chosen_algo == ALGO_SJF)
-            {
-                if (running_pcb == NULL && ready_count > 0)
-                {
-                    int next_idx = selectNextProcessIndex();
-                    PCB *next = readyQueuePopAt(next_idx);
-                    scheduleNext(next, sim_time);
-                }
-                else if (running_pcb == NULL && ready_count == 0)
-                {
-                    cpu_was_idle = true;
-                }
-            }
-            else if (chosen_algo == ALGO_RR)
-            {
-                if (running_pcb != NULL)
-                {
-                    if (quantum_remaining <= 0)
-                    {
-                        if (ready_count > 0)
-                        {
-                            PCB *preempted = running_pcb;
-                            stopProcess(preempted, sim_time);
-                            readyQueuePush(preempted);
-                            running_pcb = NULL;
-
-                            PCB *next = readyQueuePopAt(selectNextProcessIndex());
-                            scheduleNext(next, sim_time);
-                        }
-                        else
-                        {
-                            quantum_remaining = quantum;
-                        }
-                    }
-                }
-                else if (ready_count > 0)
-                {
-                    PCB *next = readyQueuePopAt(selectNextProcessIndex());
-                    scheduleNext(next, sim_time);
-                }
-                else
-                {
-                    cpu_was_idle = true;
-                }
-            }
-            else
-            {
-                if (running_pcb != NULL)
-                {
-                    if (ready_count > 0)
-                    {
-                        int next_idx = selectNextProcessIndex();
-                        PCB *best_ready = ready_queue[next_idx];
-
-                        int ready_prio = getActivePriority(best_ready);
-                        int running_prio = getActivePriority(running_pcb);
-
-                        if (ready_prio < running_prio)
-                        {
-                            PCB *preempted = running_pcb;
-                            stopProcess(preempted, sim_time);
-                            readyQueuePush(preempted);
-                            running_pcb = NULL;
-
-                            PCB *next = readyQueuePopAt(selectNextProcessIndex());
-                            scheduleNext(next, sim_time);
-                        }
-                    }
-                }
-                else if (ready_count > 0)
-                {
-                    PCB *next = readyQueuePopAt(selectNextProcessIndex());
-                    scheduleNext(next, sim_time);
-                }
-                else
-                {
-                    cpu_was_idle = true;
-                }
-            }
+            tickAccounting(sim_time);
+            handleResources(sim_time);
+            handleFinish(sim_time, &last_finish_time);
+            receiveArrivals();
+            scheduleProcesses(sim_time);
         }
     }
 
