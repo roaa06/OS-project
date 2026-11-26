@@ -12,7 +12,14 @@ FILE *log_file = NULL;
 PCB all_pcbs[MAX_PROCESSES];
 int all_pcb_count = 0;
 
-PCB *ready_queue[MAX_PROCESSES];
+typedef struct QueueNode
+{
+    PCB *pcb;
+    struct QueueNode *next;
+} QueueNode;
+
+QueueNode *ready_head = NULL;
+QueueNode *ready_tail = NULL;
 int ready_count = 0;
 
 PCB *blocked_queue[MAX_PROCESSES];
@@ -33,9 +40,22 @@ void handleChildTermination(int sig)
     termination_signals_received++;
 }
 
+void clearReadyQueue(void)
+{
+    while (ready_head != NULL)
+    {
+        QueueNode *temp = ready_head;
+        ready_head = ready_head->next;
+        free(temp);
+    }
+    ready_tail = NULL;
+    ready_count = 0;
+}
+
 void fatalError(const char *msg)
 {
     fprintf(stderr, "Fatal Error: %s\n", msg);
+    clearReadyQueue();
     destroyClk(true);
     exit(1);
 }
@@ -137,92 +157,184 @@ void updateInheritedPriority(PCB *holder)
 
 void readyQueuePush(PCB *p)
 {
-    if (ready_count >= MAX_PROCESSES)
+    QueueNode *node = (QueueNode *)malloc(sizeof(QueueNode));
+    if (!node)
     {
-        fatalError("Ready queue capacity exceeded (MAX_PROCESSES).");
+        fatalError("Memory allocation failed for readyQueuePush.");
     }
+    node->pcb = p;
+    node->next = NULL;
     p->state = STATE_READY;
-    ready_queue[ready_count++] = p;
-}
 
-PCB *readyQueuePopAt(int index)
-{
-    if (index < 0 || index >= ready_count)
+    if (ready_tail == NULL)
     {
-        return NULL;
-    }
-    PCB *p = ready_queue[index];
-    for (int i = index; i < ready_count - 1; i++)
-    {
-        ready_queue[i] = ready_queue[i + 1];
-    }
-    ready_count--;
-    ready_queue[ready_count] = NULL;
-    return p;
-}
-
-int selectNextProcessIndex(void)
-{
-    if (ready_count == 0)
-    {
-        return -1;
-    }
-
-    if (chosen_algo == ALGO_SJF)
-    {
-        int best_idx = 0;
-        for (int i = 1; i < ready_count; i++)
-        {
-            PCB *curr = ready_queue[i];
-            PCB *best = ready_queue[best_idx];
-
-            if (curr->data.runtime < best->data.runtime)
-            {
-                best_idx = i;
-            }
-            else if (curr->data.runtime == best->data.runtime)
-            {
-                if (curr->data.arrival_time < best->data.arrival_time)
-                {
-                    best_idx = i;
-                }
-                else if (curr->data.arrival_time == best->data.arrival_time && curr->data.id < best->data.id)
-                {
-                    best_idx = i;
-                }
-            }
-        }
-        return best_idx;
-    }
-    else if (chosen_algo == ALGO_RR)
-    {
-        return 0;
+        ready_head = ready_tail = node;
     }
     else
     {
-        int best_idx = 0;
-        for (int i = 1; i < ready_count; i++)
+        ready_tail->next = node;
+        ready_tail = node;
+    }
+    ready_count++;
+}
+
+PCB *readyQueuePeekBest(void)
+{
+    if (ready_head == NULL)
+    {
+        return NULL;
+    }
+    if (chosen_algo == ALGO_RR)
+    {
+        return ready_head->pcb;
+    }
+
+    QueueNode *best_node = ready_head;
+    QueueNode *curr = ready_head->next;
+
+    while (curr != NULL)
+    {
+        bool is_better = false;
+        if (chosen_algo == ALGO_SJF)
         {
-            PCB *curr = ready_queue[i];
-            PCB *best = ready_queue[best_idx];
-
-            int curr_prio = getActivePriority(curr);
-            int best_prio = getActivePriority(best);
-
-            if (curr_prio < best_prio)
+            if (curr->pcb->data.runtime < best_node->pcb->data.runtime)
             {
-                best_idx = i;
+                is_better = true;
             }
-            else if (curr_prio == best_prio)
+            else if (curr->pcb->data.runtime == best_node->pcb->data.runtime)
             {
-                if (curr->data.id < best->data.id)
+                if (curr->pcb->data.arrival_time < best_node->pcb->data.arrival_time)
                 {
-                    best_idx = i;
+                    is_better = true;
+                }
+                else if (curr->pcb->data.arrival_time == best_node->pcb->data.arrival_time &&
+                         curr->pcb->data.id < best_node->pcb->data.id)
+                {
+                    is_better = true;
                 }
             }
         }
-        return best_idx;
+        else // HPF or HPF Demotion
+        {
+            int curr_prio = getActivePriority(curr->pcb);
+            int best_prio = getActivePriority(best_node->pcb);
+
+            if (curr_prio < best_prio)
+            {
+                is_better = true;
+            }
+            else if (curr_prio == best_prio)
+            {
+                if (curr->pcb->data.id < best_node->pcb->data.id)
+                {
+                    is_better = true;
+                }
+            }
+        }
+
+        if (is_better)
+        {
+            best_node = curr;
+        }
+        curr = curr->next;
     }
+    return best_node->pcb;
+}
+
+PCB *readyQueuePopBest(void)
+{
+    if (ready_head == NULL)
+    {
+        return NULL;
+    }
+
+    if (chosen_algo == ALGO_RR)
+    {
+        QueueNode *temp = ready_head;
+        PCB *p = temp->pcb;
+        ready_head = ready_head->next;
+        if (ready_head == NULL)
+        {
+            ready_tail = NULL;
+        }
+        free(temp);
+        ready_count--;
+        return p;
+    }
+
+    QueueNode *best_node = ready_head;
+    QueueNode *best_prev = NULL;
+    QueueNode *curr = ready_head->next;
+    QueueNode *prev = ready_head;
+
+    while (curr != NULL)
+    {
+        bool is_better = false;
+        if (chosen_algo == ALGO_SJF)
+        {
+            if (curr->pcb->data.runtime < best_node->pcb->data.runtime)
+            {
+                is_better = true;
+            }
+            else if (curr->pcb->data.runtime == best_node->pcb->data.runtime)
+            {
+                if (curr->pcb->data.arrival_time < best_node->pcb->data.arrival_time)
+                {
+                    is_better = true;
+                }
+                else if (curr->pcb->data.arrival_time == best_node->pcb->data.arrival_time &&
+                         curr->pcb->data.id < best_node->pcb->data.id)
+                {
+                    is_better = true;
+                }
+            }
+        }
+        else // HPF or HPF Demotion
+        {
+            int curr_prio = getActivePriority(curr->pcb);
+            int best_prio = getActivePriority(best_node->pcb);
+
+            if (curr_prio < best_prio)
+            {
+                is_better = true;
+            }
+            else if (curr_prio == best_prio)
+            {
+                if (curr->pcb->data.id < best_node->pcb->data.id)
+                {
+                    is_better = true;
+                }
+            }
+        }
+
+        if (is_better)
+        {
+            best_node = curr;
+            best_prev = prev;
+        }
+
+        prev = curr;
+        curr = curr->next;
+    }
+
+    if (best_prev == NULL)
+    {
+        ready_head = best_node->next;
+    }
+    else
+    {
+        best_prev->next = best_node->next;
+    }
+
+    if (best_node == ready_tail)
+    {
+        ready_tail = best_prev;
+    }
+
+    PCB *p = best_node->pcb;
+    free(best_node);
+    ready_count--;
+    return p;
 }
 
 void logProcessEvent(int current_time, PCB *p, const char *event_type)
@@ -385,9 +497,9 @@ void tickAccounting(int sim_time)
     }
 
     // Consolidated single loop: advance waiting aging for all processes in ready queue
-    for (int i = 0; i < ready_count; i++)
+    for (QueueNode *curr = ready_head; curr != NULL; curr = curr->next)
     {
-        ready_queue[i]->consecutive_ready_time++;
+        curr->pcb->consecutive_ready_time++;
     }
 }
 
@@ -634,8 +746,7 @@ void scheduleProcesses(int sim_time)
     {
         if (running_pcb == NULL && ready_count > 0)
         {
-            int next_idx = selectNextProcessIndex();
-            PCB *next = readyQueuePopAt(next_idx);
+            PCB *next = readyQueuePopBest();
             scheduleNext(next, sim_time);
         }
         else if (running_pcb == NULL && ready_count == 0)
@@ -656,7 +767,7 @@ void scheduleProcesses(int sim_time)
                     readyQueuePush(preempted);
                     running_pcb = NULL;
 
-                    PCB *next = readyQueuePopAt(selectNextProcessIndex());
+                    PCB *next = readyQueuePopBest();
                     scheduleNext(next, sim_time);
                 }
                 else
@@ -667,7 +778,7 @@ void scheduleProcesses(int sim_time)
         }
         else if (ready_count > 0)
         {
-            PCB *next = readyQueuePopAt(selectNextProcessIndex());
+            PCB *next = readyQueuePopBest();
             scheduleNext(next, sim_time);
         }
         else
@@ -681,8 +792,7 @@ void scheduleProcesses(int sim_time)
         {
             if (ready_count > 0)
             {
-                int next_idx = selectNextProcessIndex();
-                PCB *best_ready = ready_queue[next_idx];
+                PCB *best_ready = readyQueuePeekBest();
 
                 int ready_prio = getActivePriority(best_ready);
                 int running_prio = getActivePriority(running_pcb);
@@ -694,14 +804,14 @@ void scheduleProcesses(int sim_time)
                     readyQueuePush(preempted);
                     running_pcb = NULL;
 
-                    PCB *next = readyQueuePopAt(selectNextProcessIndex());
+                    PCB *next = readyQueuePopBest();
                     scheduleNext(next, sim_time);
                 }
             }
         }
         else if (ready_count > 0)
         {
-            PCB *next = readyQueuePopAt(selectNextProcessIndex());
+            PCB *next = readyQueuePopBest();
             scheduleNext(next, sim_time);
         }
         else
@@ -775,6 +885,7 @@ int main(int argc, char *argv[])
 
     fclose(log_file);
     generatePerfReport(last_finish_time);
+    clearReadyQueue();
     destroyClk(false);
     return 0;
 }
