@@ -391,6 +391,72 @@ void tickAccounting(int sim_time)
     }
 }
 
+void releaseHeldResource(PCB *curr)
+{
+    if (!curr || !curr->holds_resource)
+    {
+        return;
+    }
+
+    SysResource *res = getOrCreateResource(curr->held_resource_id);
+    if (res)
+    {
+        res->is_held = false;
+        res->holder_id = -1;
+    }
+
+    curr->holds_resource = false;
+    curr->held_resource_id[0] = '\0';
+    curr->inherited_priority = -1;
+
+    int best_blocked_idx = -1;
+    for (int i = 0; i < blocked_count; i++)
+    {
+        PCB *b = blocked_queue[i];
+        int br_idx = b->current_resource_idx;
+        if (br_idx < b->data.resource_count && res &&
+            strcmp(b->data.resources[br_idx].resource_id, res->id) == 0)
+        {
+            if (best_blocked_idx == -1)
+            {
+                best_blocked_idx = i;
+            }
+            else
+            {
+                int p1 = b->original_priority;
+                int p2 = blocked_queue[best_blocked_idx]->original_priority;
+                if (p1 < p2 || (p1 == p2 && b->data.id < blocked_queue[best_blocked_idx]->data.id))
+                {
+                    best_blocked_idx = i;
+                }
+            }
+        }
+    }
+
+    if (best_blocked_idx != -1)
+    {
+        PCB *unblocked = blocked_queue[best_blocked_idx];
+
+        for (int i = best_blocked_idx; i < blocked_count - 1; i++)
+        {
+            blocked_queue[i] = blocked_queue[i + 1];
+        }
+        blocked_count--;
+        blocked_queue[blocked_count] = NULL;
+
+        if (res)
+        {
+            res->is_held = true;
+            res->holder_id = unblocked->data.id;
+            unblocked->holds_resource = true;
+            strncpy(unblocked->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
+            updateInheritedPriority(unblocked);
+        }
+
+        readyQueuePush(unblocked);
+    }
+}
+
 // Phase 2: HPF resource release & capture handling
 void handleResources(int sim_time)
 {
@@ -408,64 +474,8 @@ void handleResources(int sim_time)
         if (r_idx < curr->data.resource_count &&
             curr->execution_time == curr->data.resources[r_idx].release_time)
         {
-            SysResource *res = getOrCreateResource(curr->held_resource_id);
-            if (res)
-            {
-                res->is_held = false;
-                res->holder_id = -1;
-            }
-
-            curr->holds_resource = false;
-            curr->held_resource_id[0] = '\0';
-            curr->inherited_priority = -1;
+            releaseHeldResource(curr);
             curr->current_resource_idx++;
-
-            int best_blocked_idx = -1;
-            for (int i = 0; i < blocked_count; i++)
-            {
-                PCB *b = blocked_queue[i];
-                int br_idx = b->current_resource_idx;
-                if (br_idx < b->data.resource_count && res &&
-                    strcmp(b->data.resources[br_idx].resource_id, res->id) == 0)
-                {
-                    if (best_blocked_idx == -1)
-                    {
-                        best_blocked_idx = i;
-                    }
-                    else
-                    {
-                        int p1 = b->original_priority;
-                        int p2 = blocked_queue[best_blocked_idx]->original_priority;
-                        if (p1 < p2 || (p1 == p2 && b->data.id < blocked_queue[best_blocked_idx]->data.id))
-                        {
-                            best_blocked_idx = i;
-                        }
-                    }
-                }
-            }
-
-            if (best_blocked_idx != -1)
-            {
-                PCB *unblocked = blocked_queue[best_blocked_idx];
-
-                for (int i = best_blocked_idx; i < blocked_count - 1; i++)
-                {
-                    blocked_queue[i] = blocked_queue[i + 1];
-                }
-                blocked_count--;
-                blocked_queue[blocked_count] = NULL;
-
-                if (res)
-                {
-                    res->is_held = true;
-                    res->holder_id = unblocked->data.id;
-                    unblocked->holds_resource = true;
-                    strncpy(unblocked->held_resource_id, res->id, MAX_RESOURCE_NAME_LEN - 1);
-                    updateInheritedPriority(unblocked);
-                }
-
-                readyQueuePush(unblocked);
-            }
         }
     }
 
@@ -530,13 +540,7 @@ void handleFinish(int sim_time, int *last_finish_time)
 
         if (chosen_algo >= ALGO_HPF && curr->holds_resource)
         {
-            SysResource *res = getOrCreateResource(curr->held_resource_id);
-            if (res)
-            {
-                res->is_held = false;
-                res->holder_id = -1;
-            }
-            curr->holds_resource = false;
+            releaseHeldResource(curr);
         }
 
         running_pcb = NULL;

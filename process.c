@@ -31,7 +31,7 @@ int main(int argc, char *argv[])
             remainingtime -= (current_clk - last_clk);
             last_clk = current_clk;
         }
-        usleep(50000);
+        usleep(1000);
     }
 
     destroyClk(false);
