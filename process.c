@@ -18,10 +18,10 @@ int main(int argc, char *argv[])
     }
 
     remainingtime = atoi(argv[1]);
-    signal(SIGCONT, handle_cont);
 
     initClk();
     last_clk = getClk();
+    signal(SIGCONT, handle_cont);
 
     while (remainingtime > 0)
     {
@@ -31,9 +31,10 @@ int main(int argc, char *argv[])
             remainingtime -= (current_clk - last_clk);
             last_clk = current_clk;
         }
-        usleep(50000);
+        usleep(1000);
     }
 
     destroyClk(false);
+    kill(getppid(), SIGUSR1);
     return 0;
 }

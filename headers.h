@@ -86,7 +86,7 @@ typedef struct
     char held_resource_id[MAX_RESOURCE_NAME_LEN];
 } PCB;
 
-int *shmaddr;
+static int *shmaddr = NULL;
 
 static inline int getClk(void)
 {
