@@ -99,35 +99,43 @@ int getEffectivePriority(PCB *p)
 {
     if (chosen_algo == ALGO_HPF_DEMOTION)
     {
-        int w = p->consecutive_ready_time;
+        int waiting_time = p->consecutive_ready_time;
         int bonus = 0;
-        if (w >= 20)
+        if (waiting_time >= 20)
         {
-            bonus = ((w - 20) / 5) + 1;
+            bonus = ((waiting_time - 20) / 5) + 1;
         }
-        int eff = p->original_priority - bonus;
-        if (eff < 0)
+        int effective_priority = p->original_priority - bonus;
+        if (effective_priority < 0)
         {
-            eff = 0;
+            effective_priority = 0;
         }
-        return eff;
+        return effective_priority;
     }
     return p->original_priority;
 }
 
 int getActivePriority(PCB *p)
 {
-    int base_prio = (chosen_algo == ALGO_HPF_DEMOTION) ? getEffectivePriority(p) : p->original_priority;
-    p->effective_priority = base_prio;
+    int base_priority;
+    if (chosen_algo == ALGO_HPF_DEMOTION)
+    {
+        base_priority = getEffectivePriority(p);
+    }
+    else
+    {
+        base_priority = p->original_priority;
+    }
+    p->effective_priority = base_priority;
 
     if (p->holds_resource && p->inherited_priority != -1)
     {
-        if (p->inherited_priority < base_prio)
+        if (p->inherited_priority < base_priority)
         {
             return p->inherited_priority;
         }
     }
-    return base_prio;
+    return base_priority;
 }
 
 void updateInheritedPriority(PCB *holder)
@@ -141,14 +149,14 @@ void updateInheritedPriority(PCB *holder)
     for (int i = 0; i < blocked_count; i++)
     {
         PCB *b = blocked_queue[i];
-        int r_idx = b->current_resource_idx;
-        if (r_idx < b->data.resource_count &&
-            strcmp(b->data.resources[r_idx].resource_id, holder->held_resource_id) == 0)
+        int resource_index = b->current_resource_idx;
+        if (resource_index < b->data.resource_count &&
+            strcmp(b->data.resources[resource_index].resource_id, holder->held_resource_id) == 0)
         {
-            int prio = b->original_priority;
-            if (best_inherited == -1 || prio < best_inherited)
+            int priority = b->original_priority;
+            if (best_inherited == -1 || priority < best_inherited)
             {
-                best_inherited = prio;
+                best_inherited = priority;
             }
         }
     }
@@ -202,14 +210,14 @@ bool isBetterProcess(PCB *candidate, PCB *current_best)
     }
     else // HPF or HPF Demotion
     {
-        int cand_prio = getActivePriority(candidate);
-        int best_prio = getActivePriority(current_best);
+        int candidate_priority = getActivePriority(candidate);
+        int best_priority = getActivePriority(current_best);
 
-        if (cand_prio < best_prio)
+        if (candidate_priority < best_priority)
         {
             return true;
         }
-        if (cand_prio == best_prio)
+        if (candidate_priority == best_priority)
         {
             if (candidate->data.id < current_best->data.id)
             {
@@ -401,36 +409,50 @@ void generatePerfReport(int finish_time)
         PCB *p = &all_pcbs[i];
         total_runtime += p->data.runtime;
 
-        int ta = p->finish_time - p->data.arrival_time;
-        double wta = (double)ta / p->data.runtime;
-        sum_wta += wta;
+        int turnaround_time = p->finish_time - p->data.arrival_time;
+        double weighted_turnaround = (double)turnaround_time / p->data.runtime;
+        sum_wta += weighted_turnaround;
 
-        int wait = p->finish_time - p->data.arrival_time - p->data.runtime;
-        sum_wait += wait;
+        int waiting_time = p->finish_time - p->data.arrival_time - p->data.runtime;
+        sum_wait += waiting_time;
     }
 
-    int cpu_util = (finish_time > 0) ? ((total_runtime * 100) / finish_time) : 0;
-    double avg_wta = (all_pcb_count > 0) ? (sum_wta / all_pcb_count) : 0.0;
-    int avg_wait = (all_pcb_count > 0) ? (sum_wait / all_pcb_count) : 0;
+    int cpu_utilization = 0;
+    if (finish_time > 0)
+    {
+        cpu_utilization = (total_runtime * 100) / finish_time;
+    }
+
+    double average_wta = 0.0;
+    if (all_pcb_count > 0)
+    {
+        average_wta = sum_wta / all_pcb_count;
+    }
+
+    int average_waiting = 0;
+    if (all_pcb_count > 0)
+    {
+        average_waiting = sum_wait / all_pcb_count;
+    }
 
     double variance = 0.0;
     for (int i = 0; i < all_pcb_count; i++)
     {
         PCB *p = &all_pcbs[i];
-        int ta = p->finish_time - p->data.arrival_time;
-        double wta = (double)ta / p->data.runtime;
-        variance += (wta - avg_wta) * (wta - avg_wta);
+        int turnaround_time = p->finish_time - p->data.arrival_time;
+        double weighted_turnaround = (double)turnaround_time / p->data.runtime;
+        variance += (weighted_turnaround - average_wta) * (weighted_turnaround - average_wta);
     }
     if (all_pcb_count > 0)
     {
         variance /= all_pcb_count;
     }
-    double std_wta = sqrt(variance);
+    double std_dev_wta = sqrt(variance);
 
-    fprintf(perf_file, "CPU utilization = %d%%\n", cpu_util);
-    fprintf(perf_file, "Avg WTA = %.2f\n", avg_wta);
-    fprintf(perf_file, "Avg Waiting = %d\n", avg_wait);
-    fprintf(perf_file, "Std WTA = %.2f\n", std_wta);
+    fprintf(perf_file, "CPU utilization = %d%%\n", cpu_utilization);
+    fprintf(perf_file, "Avg WTA = %.2f\n", average_wta);
+    fprintf(perf_file, "Avg Waiting = %d\n", average_waiting);
+    fprintf(perf_file, "Std WTA = %.2f\n", std_dev_wta);
 
     fclose(perf_file);
 }
@@ -762,10 +784,10 @@ void scheduleProcesses(int sim_time)
             {
                 PCB *best_ready = readyQueuePeekBest();
 
-                int ready_prio = getActivePriority(best_ready);
-                int running_prio = getActivePriority(running_pcb);
+                int ready_priority = getActivePriority(best_ready);
+                int running_priority = getActivePriority(running_pcb);
 
-                if (ready_prio < running_prio)
+                if (ready_priority < running_priority)
                 {
                     PCB *preempted = running_pcb;
                     stopProcess(preempted, sim_time);

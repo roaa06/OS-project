@@ -1,6 +1,6 @@
 #include "headers.h"
 
-int remainingtime;
+int remaining_time;
 volatile sig_atomic_t last_clk;
 
 void handle_cont(int sig)
@@ -17,18 +17,18 @@ int main(int argc, char *argv[])
         exit(-1);
     }
 
-    remainingtime = atoi(argv[1]);
+    remaining_time = atoi(argv[1]);
 
     initClk();
     last_clk = getClk();
     signal(SIGCONT, handle_cont);
 
-    while (remainingtime > 0)
+    while (remaining_time > 0)
     {
         int current_clk = getClk();
         if (current_clk > last_clk)
         {
-            remainingtime -= (current_clk - last_clk);
+            remaining_time = remaining_time - (current_clk - last_clk);
             last_clk = current_clk;
         }
         usleep(1000);

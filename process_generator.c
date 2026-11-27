@@ -95,13 +95,13 @@ void readResources(const char *filename, ProcessData processes[], int count)
             {
                 if (processes[i].id == pid)
                 {
-                    int r_idx = processes[i].resource_count;
-                    if (r_idx < MAX_RESOURCES_PER_PROCESS)
+                    int resource_index = processes[i].resource_count;
+                    if (resource_index < MAX_RESOURCES_PER_PROCESS)
                     {
-                        strncpy(processes[i].resources[r_idx].resource_id, resource_id, MAX_RESOURCE_NAME_LEN - 1);
-                        processes[i].resources[r_idx].resource_id[MAX_RESOURCE_NAME_LEN - 1] = '\0';
-                        processes[i].resources[r_idx].capture_time = capture;
-                        processes[i].resources[r_idx].release_time = release;
+                        strncpy(processes[i].resources[resource_index].resource_id, resource_id, MAX_RESOURCE_NAME_LEN - 1);
+                        processes[i].resources[resource_index].resource_id[MAX_RESOURCE_NAME_LEN - 1] = '\0';
+                        processes[i].resources[resource_index].capture_time = capture;
+                        processes[i].resources[resource_index].release_time = release;
                         processes[i].resource_count++;
                     }
                     break;
@@ -134,8 +134,17 @@ int main(int argc, char *argv[])
 {
     signal(SIGINT, clearResources);
 
-    const char *proc_filename = (argc > 1) ? argv[1] : "processes.txt";
-    const char *res_filename = (argc > 2) ? argv[2] : "resources.txt";
+    const char *proc_filename = "processes.txt";
+    if (argc > 1)
+    {
+        proc_filename = argv[1];
+    }
+
+    const char *res_filename = "resources.txt";
+    if (argc > 2)
+    {
+        res_filename = argv[2];
+    }
 
     ProcessData processes[MAX_PROCESSES];
     int total_processes = readProcesses(proc_filename, processes);

@@ -27,7 +27,14 @@ int main(int argc, char *argv[])
     }
 
     // optional seed: ./generator 42 repeats the same test case
-    srand(argc > 1 ? (unsigned)atoi(argv[1]) : (unsigned)time(NULL));
+    if (argc > 1)
+    {
+        srand((unsigned)atoi(argv[1]));
+    }
+    else
+    {
+        srand((unsigned)time(NULL));
+    }
 
     fprintf(pFile, "#id\tarrival\truntime\tpriority\n");
     fprintf(rFile, "#pid\tresourceid\tcapturetime\treleasetime\n");
